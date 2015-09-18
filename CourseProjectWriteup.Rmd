@@ -1,0 +1,169 @@
+---
+title: 'Prediction Assignment Writeup: predict barbell lifts correctness'
+author: "Rene Larsson"
+date: "Thursday, September 17, 2015"
+output: html_document
+---
+The goal of the project is to predict if the 6 participants did barbell lifts correctly or incorrectly. This report will describe how to build a predictive model. 
+
+The training and testing sets are available from the following sources:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Load the libraries:
+```{r}
+library(randomForest)
+library(caret)
+
+```
+
+Load the data sets:
+```{r}
+pmlTraining = read.csv("./pml-training.csv")
+pmlTesting = read.csv("./pml-testing.csv")
+
+```
+The testing set will only be used to predict the classes on the model fit for the submission.
+
+Examine the data:
+```{r}
+dim(pmlTraining)
+head(str(pmlTraining))
+
+```
+Our interest lie on the movement predictors and inspection shows that the set contains personal data and other predictors that can be removed - 'X', 'username', 'raw timestamp part1', 'raw timestamp part2', 'cvtd timestamp', 'new window' and 'num window'. The data must be pre-processed.
+
+Remove NA filled and irrelevant predictors by concatenating relevant predictors:
+```{r}
+predictors = c("roll_belt", "pitch_belt", "yaw_belt", "total_accel_belt","gyros_belt_x", "gyros_belt_y", "gyros_belt_z", "accel_belt_x", "accel_belt_y","accel_belt_z", "magnet_belt_x", "magnet_belt_y", "magnet_belt_z", "roll_arm","pitch_arm", "yaw_arm", "total_accel_arm", "gyros_arm_x", "gyros_arm_y","gyros_arm_z", "accel_arm_x", "accel_arm_y", "accel_arm_z", "magnet_arm_x","magnet_arm_y", "magnet_arm_z", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell","total_accel_dumbbell", "gyros_dumbbell_x", "gyros_dumbbell_y", "gyros_dumbbell_z","accel_dumbbell_x", "accel_dumbbell_y", "accel_dumbbell_z", "magnet_dumbbell_x","magnet_dumbbell_y", "magnet_dumbbell_z", "roll_forearm", "pitch_forearm","yaw_forearm", "total_accel_forearm", "gyros_forearm_x", "gyros_forearm_y","gyros_forearm_z", "accel_forearm_x", "accel_forearm_y", "accel_forearm_z","magnet_forearm_x", "magnet_forearm_y", "magnet_forearm_z")
+
+```
+
+1. Add new predictors to test set
+2. Add outcome to new predictors
+3. Add outcome/new predictors to training set
+```{r}
+proTesting = pmlTesting[, predictors]
+predictors = c(predictors, "classe")
+proTraining = pmlTraining[, predictors]
+
+```
+
+Examine the data clean up:
+```{r}
+dim(proTraining)
+summary(proTraining)
+
+```
+
+
+Examine correlations and potential bias:
+1. calculate value of correlation - leave out the outcome
+2. create heatmap of correlation value
+
+
+```{r}
+corrTrain = cor(proTraining[, names(proTraining) != "classe"])
+heatmap(corrTrain)
+
+```
+
+
+The heat map indicates that few predictors correlate, but those that do seem highly correlated.This can be further explored by thresholding:
+
+1. set diagonal of matrices to zero (1:1 correlations)
+2. examine predictors that have a correlation greater than .8 treshhold
+3. identify predictors
+```{r}
+diag(corrTrain) = 0
+corrTrain[corrTrain < -0.8 | corrTrain > 0.8]
+which(corrTrain < -0.8 | corrTrain > 0.8, arr.ind=T)
+
+```
+There are several pairs that are highly corelated, far beyond the threshold. It would be prudent to raise it in order to keep as many predictors as possible.
+
+```{r}
+corrTrain[which(corrTrain < -0.95 | corrTrain > 0.95, arr.ind=T)]
+which(corrTrain < -0.95 |corrTrain > 0.95, arr.ind=T)
+corrTrain[which(corrTrain < -0.98 | corrTrain > 0.98, arr.ind=T)]
+which(corrTrain < -0.98 |corrTrain > 0.98, arr.ind=T)
+
+```
+
+Since roll_belt has a high correlation to two other predictors, it will be removed:
+```{r}
+predictors = c("pitch_belt", "yaw_belt", "total_accel_belt", "gyros_belt_x","gyros_belt_y", "gyros_belt_z", "accel_belt_x", "accel_belt_y", "accel_belt_z","magnet_belt_x", "magnet_belt_y", "magnet_belt_z", "roll_arm", "pitch_arm","yaw_arm", "total_accel_arm", "gyros_arm_x", "gyros_arm_y", "gyros_arm_z","accel_arm_x", "accel_arm_y", "accel_arm_z", "magnet_arm_x", "magnet_arm_y","magnet_arm_z", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell", "total_accel_dumbbell","gyros_dumbbell_x", "gyros_dumbbell_y", "gyros_dumbbell_z", "accel_dumbbell_x","accel_dumbbell_y", "accel_dumbbell_z", "magnet_dumbbell_x", "magnet_dumbbell_y","magnet_dumbbell_z", "roll_forearm", "pitch_forearm", "yaw_forearm", "total_accel_forearm","gyros_forearm_x", "gyros_forearm_y", "gyros_forearm_z", "accel_forearm_x","accel_forearm_y", "accel_forearm_z", "magnet_forearm_x", "magnet_forearm_y","magnet_forearm_z")
+
+```
+
+1. Add predictors to test set
+2. Add outcome to predictors
+3. Add outcome/predictors to training set
+```{r}
+proTesting = pmlTesting[, predictors]
+predictors = c(predictors, "classe")
+proTraining = pmlTraining[, predictors]
+
+```
+The chosen model is random forest. This approach is accurate and widely used as a method for prediction. Yet, it is quite slow and can lead to overfitting. It is therefore important to cross validate in regards to the latter, and because of the former trees are set to 500:
+
+1. Split the data
+2. create training subset
+3. create validation set
+```{r}
+inTrain = createDataPartition(y=proTraining$classe,p=0.5, list=FALSE)
+trainSubset = proTraining[inTrain, ]
+validation = proTraining[-inTrain, ]
+
+```
+
+Create the model:
+
+1. fit model
+2. inspect OOB and calculate accuracy
+
+```{r}
+set.seed(1405)
+```
+
+```{r}
+modFit = randomForest(classe ~ ., data = trainSubset, ntree = 500)
+modFit
+
+```
+
+The accuracy is app .99 (accuracy=diagonal/confusion matrix). 
+
+cross-validation:
+
+1. predict the validation test the values on the modFit
+2. Calculate accuracy of prediction
+
+```{r}
+set.seed(2015)
+```
+
+
+```{r}
+predTest = predict(modFit, validation)
+table(predTest, validation$classe)
+predAc = postResample(predTest, validation$classe)
+predAc
+
+```
+The accuracy is about the same, keeping in mind that sample test sets are more optimistic. 
+
+Predicted out of sample error rate:
+```{r}
+predError = confusionMatrix(predTest, validation$classe)
+predError
+
+```
+The estimated error rate is (1-accuracy). 
+
+Submission:
+```{r}
+predict(modFit, pmlTesting)
+```
